@@ -2,7 +2,7 @@ name: Build Debian Package for WSJT-Z
 
 on:
   push:
-    branches: [ master ] # Adjust if your default branch differs
+    branches: [ master ]
   workflow_dispatch:
 
 jobs:
@@ -36,46 +36,24 @@ jobs:
           dpkg-dev debhelper fakeroot \
           rpm
 
-    # ------------------------------------------------------------------
-    # GCC 16 on Debian testing/forky produces one false-positive
-    # -Wmaybe-uninitialized diagnostic on the placement-new'd HRDMessage
-    # flexible-array struct in Transceiver/HRDTransceiver.cpp.  Because
-    # the project's CMakeLists.txt unconditionally adds -Werror, that
-    # single false positive turns into a hard build error.
-    #
-    # The block appended below demotes ONLY that one warning class from
-    # error to warning, and only when GCC >= 16 is the C++ compiler.
-    # It is appended at the very end of CMakeLists.txt so that it is
-    # processed AFTER the project's own -Werror setting; the resulting
-    # effective command line is:
-    #
-    #     ... -Werror ... -Wno-error=maybe-uninitialized
-    #
-    # Every other warning still triggers -Werror, so a genuinely new
-    # warning in any file will still fail the build.  When GCC fixes
-    # the analysis upstream (or HRDMessage is refactored), this block
-    # becomes a no-op.
-    # ------------------------------------------------------------------
     - name: Add GCC 16 workaround to CMakeLists.txt
       run: |
-        cat >> CMakeLists.txt <<'EOF'
-
-# -----------------------------------------------------------------------------
-# Local build fix for GCC 16 on Linux (Debian testing/forky and relatives).
-#
-# GCC 16 added a stricter -Wmaybe-uninitialized analysis that produces a
-# false positive on the placement-new'd HRDMessage flexible-array struct in
-# Transceiver/HRDTransceiver.cpp.  Because this project unconditionally adds
-# -Werror, that one false positive stops the whole build.  Demote only that
-# one warning class from error to warning, only for GCC >= 16.  All other
-# warnings continue to be treated as errors, preserving the project's
-# warning discipline.
-# -----------------------------------------------------------------------------
-if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
-    CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "16.0")
-  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=maybe-uninitialized")
-endif ()
-EOF
+        printf "\n" >> CMakeLists.txt
+        printf "# -----------------------------------------------------------------------------\n" >> CMakeLists.txt
+        printf "# Local build fix for GCC 16 on Linux (Debian testing/forky and relatives).\n" >> CMakeLists.txt
+        printf "#\n" >> CMakeLists.txt
+        printf "# GCC 16 added a stricter -Wmaybe-uninitialized analysis that produces a\n" >> CMakeLists.txt
+        printf "# false positive on the placement-new'd HRDMessage flexible-array struct in\n" >> CMakeLists.txt
+        printf "# Transceiver/HRDTransceiver.cpp.  Because this project unconditionally adds\n" >> CMakeLists.txt
+        printf "# -Werror, that one false positive stops the whole build.  Demote only that\n" >> CMakeLists.txt
+        printf "# one warning class from error to warning, only for GCC >= 16.  All other\n" >> CMakeLists.txt
+        printf "# warnings continue to be treated as errors, preserving the project's\n" >> CMakeLists.txt
+        printf "# warning discipline.\n" >> CMakeLists.txt
+        printf "# -----------------------------------------------------------------------------\n" >> CMakeLists.txt
+        printf 'if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND\n' >> CMakeLists.txt
+        printf '    CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "16.0")\n' >> CMakeLists.txt
+        printf '  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=maybe-uninitialized")\n' >> CMakeLists.txt
+        printf 'endif ()\n' >> CMakeLists.txt
         echo "--- appended block ---"
         tail -n 20 CMakeLists.txt
 
