@@ -2,7 +2,7 @@ name: Build Debian Package for WSJT-Z
 
 on:
   push:
-    branches: [ main ] # Adjust if your default branch is different
+    branches: [ main ] # Adjust if your default branch differs
   workflow_dispatch:
 
 jobs:
@@ -36,19 +36,48 @@ jobs:
           dpkg-dev debhelper fakeroot \
           rpm
 
-    # -----------------------------------------------------------------
-    # Upstream WSJT-X CMakeLists.txt (line 402) unconditionally adds
-    # -Werror to CMAKE_CXX_FLAGS.  Lines 407-410 then demote the known
-    # GCC 16 false-positive -Wmaybe-uninitialized on HRDMessage to a
-    # warning, but ONLY for WIN32.  Debian forky ships GCC 16, so the
-    # same false-positive breaks the Linux build.  This step extends
-    # that exact upstream workaround to UNIX platforms.
-    # -----------------------------------------------------------------
-    - name: Extend upstream GCC 16 workaround to Linux
+    # ------------------------------------------------------------------
+    # GCC 16 on Debian testing/forky produces one false-positive
+    # -Wmaybe-uninitialized diagnostic on the placement-new'd HRDMessage
+    # flexible-array struct in Transceiver/HRDTransceiver.cpp.  Because
+    # the project's CMakeLists.txt unconditionally adds -Werror, that
+    # single false positive turns into a hard build error.
+    #
+    # The block appended below demotes ONLY that one warning class from
+    # error to warning, and only when GCC >= 16 is the C++ compiler.
+    # It is appended at the very end of CMakeLists.txt so that it is
+    # processed AFTER the project's own -Werror setting; the resulting
+    # effective command line is:
+    #
+    #     ... -Werror ... -Wno-error=maybe-uninitialized
+    #
+    # Every other warning still triggers -Werror, so a genuinely new
+    # warning in any file will still fail the build.  When GCC fixes
+    # the analysis upstream (or HRDMessage is refactored), this block
+    # becomes a no-op.
+    # ------------------------------------------------------------------
+    - name: Add GCC 16 workaround to CMakeLists.txt
       run: |
-        sed -i 's/if (WIN32 AND/if ((WIN32 OR UNIX) AND/' CMakeLists.txt
-        echo "Verifying patch:"
-        grep -n -A3 'Wno-error=maybe-uninitialized' CMakeLists.txt
+        cat >> CMakeLists.txt <<'EOF'
+
+# -----------------------------------------------------------------------------
+# Local build fix for GCC 16 on Linux (Debian testing/forky and relatives).
+#
+# GCC 16 added a stricter -Wmaybe-uninitialized analysis that produces a
+# false positive on the placement-new'd HRDMessage flexible-array struct in
+# Transceiver/HRDTransceiver.cpp.  Because this project unconditionally adds
+# -Werror, that one false positive stops the whole build.  Demote only that
+# one warning class from error to warning, only for GCC >= 16.  All other
+# warnings continue to be treated as errors, preserving the project's
+# warning discipline.
+# -----------------------------------------------------------------------------
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+    CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "16.0")
+  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=maybe-uninitialized")
+endif ()
+EOF
+        echo "--- appended block ---"
+        tail -n 20 CMakeLists.txt
 
     - name: Configure with CMake
       run: |
@@ -57,8 +86,7 @@ jobs:
           -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
           -DWSJT_SKIP_MANPAGES=ON \
           -DWSJT_GENERATE_DOCS=OFF \
-          -DCMAKE_INSTALL_PREFIX=/usr \
-          -Wno-dev
+          -DCMAKE_INSTALL_PREFIX=/usr
 
     - name: Build
       run: |
@@ -66,14 +94,9 @@ jobs:
 
     - name: Verify binary was produced
       run: |
-        file build/wsjtx
-        file build/wsjtx | grep -q "ELF 64-bit"
+        file build/wsjtz
+        file build/wsjtz | grep -q "ELF 64-bit"
 
-    # -----------------------------------------------------------------
-    # Package the .deb exactly as upstream WSJT-X does in its own
-    # build-linux.yml.  The CPACK_DEBIAN_FILE_NAME override aligns the
-    # output filename with the WSJT-Z convention.
-    # -----------------------------------------------------------------
     - name: Package .deb
       run: |
         cd build
@@ -88,7 +111,6 @@ jobs:
         fi
         ls -lh "$DEB"
         file "$DEB"
-        echo "DEB_FILE=$DEB" >> $GITHUB_ENV
 
     - name: Upload .deb artifact
       uses: actions/upload-artifact@v4
