@@ -33,6 +33,7 @@ jobs:
           libusb-1.0-0-dev libudev-dev \
           libreadline-dev portaudio19-dev \
           libhamlib-dev \
+          libhamlib-utils \
           dpkg-dev debhelper fakeroot \
           rpm
 
