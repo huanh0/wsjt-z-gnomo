@@ -1,0 +1,120 @@
+name: Build Debian Package for WSJT-Z
+
+on:
+  push:
+    branches: [ main ] # Adjust if your default branch differs
+  workflow_dispatch:
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest
+
+    container:
+      image: debian:forky-slim
+      options: --user root
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install build dependencies
+      run: |
+        apt-get update
+        apt-get install -y --no-install-recommends \
+          build-essential cmake git \
+          gfortran autoconf automake libtool \
+          pkg-config texinfo \
+          asciidoctor asciidoc docbook-xsl \
+          libfftw3-dev libboost-all-dev \
+          qtbase5-dev qtdeclarative5-dev qtmultimedia5-dev \
+          libqt5serialport5-dev libqt5opengl5-dev libqt5websockets5-dev \
+          libqt5sql5-sqlite \
+          qttools5-dev qttools5-dev-tools \
+          libusb-1.0-0-dev libudev-dev \
+          libreadline-dev portaudio19-dev \
+          libhamlib-dev \
+          dpkg-dev debhelper fakeroot \
+          rpm
+
+    # ------------------------------------------------------------------
+    # GCC 16 on Debian testing/forky produces one false-positive
+    # -Wmaybe-uninitialized diagnostic on the placement-new'd HRDMessage
+    # flexible-array struct in Transceiver/HRDTransceiver.cpp.  Because
+    # the project's CMakeLists.txt unconditionally adds -Werror, that
+    # single false positive turns into a hard build error.
+    #
+    # The block appended below demotes ONLY that one warning class from
+    # error to warning, and only when GCC >= 16 is the C++ compiler.
+    # It is appended at the very end of CMakeLists.txt so that it is
+    # processed AFTER the project's own -Werror setting; the resulting
+    # effective command line is:
+    #
+    #     ... -Werror ... -Wno-error=maybe-uninitialized
+    #
+    # Every other warning still triggers -Werror, so a genuinely new
+    # warning in any file will still fail the build.  When GCC fixes
+    # the analysis upstream (or HRDMessage is refactored), this block
+    # becomes a no-op.
+    # ------------------------------------------------------------------
+    - name: Add GCC 16 workaround to CMakeLists.txt
+      run: |
+        cat >> CMakeLists.txt <<'EOF'
+
+# -----------------------------------------------------------------------------
+# Local build fix for GCC 16 on Linux (Debian testing/forky and relatives).
+#
+# GCC 16 added a stricter -Wmaybe-uninitialized analysis that produces a
+# false positive on the placement-new'd HRDMessage flexible-array struct in
+# Transceiver/HRDTransceiver.cpp.  Because this project unconditionally adds
+# -Werror, that one false positive stops the whole build.  Demote only that
+# one warning class from error to warning, only for GCC >= 16.  All other
+# warnings continue to be treated as errors, preserving the project's
+# warning discipline.
+# -----------------------------------------------------------------------------
+if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND
+    CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "16.0")
+  set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error=maybe-uninitialized")
+endif ()
+EOF
+        echo "--- appended block ---"
+        tail -n 20 CMakeLists.txt
+
+    - name: Configure with CMake
+      run: |
+        cmake -S . -B build \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+          -DWSJT_SKIP_MANPAGES=ON \
+          -DWSJT_GENERATE_DOCS=OFF \
+          -DCMAKE_INSTALL_PREFIX=/usr
+
+    - name: Build
+      run: |
+        cmake --build build -j$(nproc)
+
+    - name: Verify binary was produced
+      run: |
+        file build/wsjtz
+        file build/wsjtz | grep -q "ELF 64-bit"
+
+    - name: Package .deb
+      run: |
+        cd build
+        cpack -G DEB \
+          -D "CPACK_DEBIAN_FILE_NAME=wsjtz_${GITHUB_REF_NAME}_amd64.deb"
+
+        DEB=$(ls *.deb 2>/dev/null | head -1)
+        if [ -z "$DEB" ]; then
+          echo "::error::cpack -G DEB produced no .deb file"
+          ls -la
+          exit 1
+        fi
+        ls -lh "$DEB"
+        file "$DEB"
+
+    - name: Upload .deb artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: wsjtz-deb-forky
+        path: build/*.deb
+        if-no-files-found: error
