@@ -72,8 +72,8 @@ jobs:
 
     - name: Verify binary was produced
       run: |
-        file build/wsjtz
-        file build/wsjtz | grep -q "ELF 64-bit"
+        file build/wsjtx
+        file build/wsjtx | grep -q "ELF 64-bit"
 
     - name: Package .deb
       run: |
