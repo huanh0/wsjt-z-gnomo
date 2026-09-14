@@ -1,0 +1,55 @@
+name: Build Debian Forky Package
+
+on:
+  push:
+    branches: [ main ] # Or 'master'
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  build-deb:
+    runs-on: ubuntu-latest # The host runner just orchestrates the Docker container
+    container:
+      image: debian:forky-slim
+      options: --user root
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install build dependencies
+      run: |
+        apt-get update
+        apt-get install -y --no-install-recommends \
+          build-essential cmake git \
+          gfortran autoconf automake libtool \
+          asciidoctor asciidoc docbook-xsl \
+          libfftw3-dev libboost-all-dev \
+          qtbase5-dev qtdeclarative5-dev qtmultimedia5-dev \
+          libqt5serialport5-dev libqt5opengl5-dev libqt5websockets5-dev \
+          qttools5-dev qttools5-dev-tools \
+          libusb-1.0-0-dev libudev-dev \
+          portaudio19-dev libsamplerate0-dev \
+          libhamlib-dev \
+          devscripts debhelper fakeroot
+
+    - name: Configure with CMake
+      run: |
+        mkdir -p build
+        cd build
+        cmake .. \
+          -DCMAKE_BUILD_TYPE=Release \
+          -DWSJT_SKIP_MANPAGES=ON \
+          -DWSJT_GENERATE_DOCS=OFF \
+          -DCMAKE_INSTALL_PREFIX=/usr
+
+    - name: Build and package
+      run: |
+        cd build
+        cmake --build . -j$(nproc)
+        cpack -G DEB
+
+    - name: Upload .deb artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: wsjtz-deb-forky
+        path: build/*.deb
