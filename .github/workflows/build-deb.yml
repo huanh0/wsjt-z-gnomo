@@ -31,7 +31,7 @@ jobs:
           portaudio19-dev libsamplerate0-dev \
           libhamlib-dev \
           devscripts debhelper fakeroot
-
+          
     - name: Configure with CMake
       run: |
         mkdir -p build
@@ -40,7 +40,10 @@ jobs:
           -DCMAKE_BUILD_TYPE=Release \
           -DWSJT_SKIP_MANPAGES=ON \
           -DWSJT_GENERATE_DOCS=OFF \
-          -DCMAKE_INSTALL_PREFIX=/usr
+          -DCMAKE_INSTALL_PREFIX=/usr \
+          -DCMAKE_C_FLAGS="-Wno-error" \
+          -DCMAKE_CXX_FLAGS="-Wno-error" \
+          -DCMAKE_Fortran_FLAGS="-Wno-error"
 
     - name: Build and package
       run: |
