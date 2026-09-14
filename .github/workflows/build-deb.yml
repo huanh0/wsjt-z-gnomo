@@ -1,13 +1,14 @@
-name: Build Debian Forky Package
+name: Build Debian Package for WSJT-Z
 
 on:
   push:
-    branches: [ main ] # Or 'master'
-  workflow_dispatch: # Allows manual triggering
+    branches: [ main ] # Adjust if your default branch is different
+  workflow_dispatch:
 
 jobs:
   build-deb:
-    runs-on: ubuntu-latest # The host runner just orchestrates the Docker container
+    runs-on: ubuntu-latest
+
     container:
       image: debian:forky-slim
       options: --user root
@@ -22,37 +23,76 @@ jobs:
         apt-get install -y --no-install-recommends \
           build-essential cmake git \
           gfortran autoconf automake libtool \
+          pkg-config texinfo \
           asciidoctor asciidoc docbook-xsl \
           libfftw3-dev libboost-all-dev \
           qtbase5-dev qtdeclarative5-dev qtmultimedia5-dev \
           libqt5serialport5-dev libqt5opengl5-dev libqt5websockets5-dev \
+          libqt5sql5-sqlite \
           qttools5-dev qttools5-dev-tools \
           libusb-1.0-0-dev libudev-dev \
-          portaudio19-dev libsamplerate0-dev \
+          libreadline-dev portaudio19-dev \
           libhamlib-dev \
-          devscripts debhelper fakeroot
-          
+          dpkg-dev debhelper fakeroot \
+          rpm
+
+    # -----------------------------------------------------------------
+    # Upstream WSJT-X CMakeLists.txt (line 402) unconditionally adds
+    # -Werror to CMAKE_CXX_FLAGS.  Lines 407-410 then demote the known
+    # GCC 16 false-positive -Wmaybe-uninitialized on HRDMessage to a
+    # warning, but ONLY for WIN32.  Debian forky ships GCC 16, so the
+    # same false-positive breaks the Linux build.  This step extends
+    # that exact upstream workaround to UNIX platforms.
+    # -----------------------------------------------------------------
+    - name: Extend upstream GCC 16 workaround to Linux
+      run: |
+        sed -i 's/if (WIN32 AND/if ((WIN32 OR UNIX) AND/' CMakeLists.txt
+        echo "Verifying patch:"
+        grep -n -A3 'Wno-error=maybe-uninitialized' CMakeLists.txt
+
     - name: Configure with CMake
       run: |
-        mkdir -p build
-        cd build
-        cmake .. \
+        cmake -S . -B build \
           -DCMAKE_BUILD_TYPE=Release \
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
           -DWSJT_SKIP_MANPAGES=ON \
           -DWSJT_GENERATE_DOCS=OFF \
           -DCMAKE_INSTALL_PREFIX=/usr \
-          -DCMAKE_C_FLAGS="-Wno-error" \
-          -DCMAKE_CXX_FLAGS="-Wno-error" \
-          -DCMAKE_Fortran_FLAGS="-Wno-error"
+          -Wno-dev
 
-    - name: Build and package
+    - name: Build
+      run: |
+        cmake --build build -j$(nproc)
+
+    - name: Verify binary was produced
+      run: |
+        file build/wsjtx
+        file build/wsjtx | grep -q "ELF 64-bit"
+
+    # -----------------------------------------------------------------
+    # Package the .deb exactly as upstream WSJT-X does in its own
+    # build-linux.yml.  The CPACK_DEBIAN_FILE_NAME override aligns the
+    # output filename with the WSJT-Z convention.
+    # -----------------------------------------------------------------
+    - name: Package .deb
       run: |
         cd build
-        cmake --build . -j$(nproc)
-        cpack -G DEB
+        cpack -G DEB \
+          -D "CPACK_DEBIAN_FILE_NAME=wsjtz_${GITHUB_REF_NAME}_amd64.deb"
+
+        DEB=$(ls *.deb 2>/dev/null | head -1)
+        if [ -z "$DEB" ]; then
+          echo "::error::cpack -G DEB produced no .deb file"
+          ls -la
+          exit 1
+        fi
+        ls -lh "$DEB"
+        file "$DEB"
+        echo "DEB_FILE=$DEB" >> $GITHUB_ENV
 
     - name: Upload .deb artifact
       uses: actions/upload-artifact@v4
       with:
         name: wsjtz-deb-forky
         path: build/*.deb
+        if-no-files-found: error
